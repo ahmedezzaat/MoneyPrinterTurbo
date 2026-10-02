@@ -54,6 +54,7 @@ from app.services import (
     metaso_minimax,
     muapi,
     ofox,
+    property_listing,
     subtitle,
     video,
     volcengine_seedance,
@@ -4968,11 +4969,105 @@ def _render_loomloom_script_generation(params):
     _render_loomloom_candidates()
 
 
+def _import_property_listing(listing_url):
+    """Fill the subject, script and local photos from a real estate listing."""
+    if not listing_url:
+        st.warning(tr("Please Enter a Property Listing Link"))
+        return
+
+    language = st.session_state.get(
+        localized_widget_key("script_language_select"),
+        config.ui.get("video_language", ""),
+    )
+    extra_requirements = st.session_state.get("video_script_prompt", "")
+    with st.spinner(tr("Importing Property Listing")):
+        try:
+            draft = property_listing.create_reel_draft(
+                listing_url,
+                language=language or "",
+                extra_requirements=extra_requirements or "",
+                run_llm=_run_llm_read_operation,
+            )
+        except property_listing.PropertyListingError as exc:
+            st.error(f"{tr('Property Listing Import Failed')}: {exc}")
+            return
+        except Exception as exc:
+            logger.exception(f"property listing import failed: {exc}")
+            st.error(f"{tr('Property Listing Import Failed')}: {exc}")
+            return
+
+    local_videos_dir = utils.storage_dir("local_videos", create=True)
+    st.session_state["video_subject"] = draft.video_subject
+    st.session_state["video_script"] = draft.video_script
+    # Listing photos replace stock footage, so search keywords are not needed.
+    st.session_state["video_terms"] = ""
+    st.session_state["local_video_materials"] = [
+        {
+            "provider": "local",
+            "url": os.path.join(local_videos_dir, name),
+            "duration": 0,
+        }
+        for name in draft.material_files
+    ]
+    st.session_state.pop("local_video_materials_uploader", None)
+    _set_stable_widget_value("video_source_select", "local")
+    st.session_state["property_listing_import"] = {
+        "url": draft.listing.url,
+        "details": draft.listing.details(),
+        "photos": st.session_state["local_video_materials"],
+    }
+    st.success(
+        tr("Property Listing Imported").format(count=len(draft.material_files))
+    )
+
+
+def _render_property_listing_import():
+    """Render the listing link field that drafts a property reel."""
+    with st.container(key="property_listing_field"):
+        listing_url = st.text_input(
+            tr("Property Listing Link"),
+            placeholder=tr("Property Listing Link Placeholder"),
+            help=tr("Property Listing Link Help"),
+            key="property_listing_url",
+        ).strip()
+        if st.button(
+            tr("Create Reel from Link"),
+            key="import_property_listing",
+            use_container_width=True,
+            type="secondary",
+            icon=":material/home_work:",
+        ):
+            _import_property_listing(listing_url)
+
+        imported = st.session_state.get("property_listing_import")
+        if not imported:
+            return
+        with st.expander(tr("Imported Property Details"), expanded=False):
+            st.caption(imported.get("url", ""))
+            for key, value in imported.get("details", {}).items():
+                if key == "url":
+                    continue
+                if isinstance(value, list):
+                    value = ", ".join(value)
+                label = key.replace("_", " ").capitalize()
+                # Listing text comes from third-party pages; render it as plain
+                # text so it cannot inject markdown links or HTML.
+                st.text(f"{label}: {value}")
+            photo_paths = [
+                photo.get("url")
+                for photo in imported.get("photos", [])
+                if photo.get("url") and os.path.exists(photo.get("url"))
+            ]
+            if photo_paths:
+                st.image(photo_paths[:6], width=90)
+
+
 def _render_script_settings(panel, params):
     """渲染文案设置并更新生成参数。"""
     with panel:
         with st.container(border=True):
             st.write(tr("Video Script Settings"))
+            _render_property_listing_import()
             # 标签行需要容纳“配置大模型”入口，因此无法继续使用 text_area
             # 内置标签。把标签和输入框收进同一个字段容器后，可覆盖内部间距，
             # 同时让该字段与页面上的其它表单控件保持一致的外部节奏。
