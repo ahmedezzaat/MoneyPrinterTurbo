@@ -1,0 +1,8 @@
+{
+  "name": "moneyprinterturbo",
+  "private": true,
+  "scripts": {
+    "dev": "./webui.sh",
+    "dev:win": "webui.bat"
+  }
+}
